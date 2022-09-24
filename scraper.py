@@ -6,7 +6,6 @@ from time import sleep
 from datetime import datetime
 import requests
 import argparse
-import json as jsonOld
 import ujson as json
 import re
 import smtplib
@@ -30,6 +29,7 @@ class Scraper:
             raise FileNotFoundError(f"Could not load {appdata_file}.")
         self._appdata = appdata
         self._appdata_file = appdata_file
+        self.index = 0
         # print("appdata file open")
     
     def _check_for_removed(self):
@@ -38,7 +38,7 @@ class Scraper:
         :return: return array of links to removed ones.
         """
         print("Checking for removed links...")
-        visited = self._appdata["visited"]
+        visited = self._appdata[self.index]["visited"]
         removed = []
         for i, v in enumerate(visited):
             url = v["link"]
@@ -46,7 +46,7 @@ class Scraper:
             if r.status_code == 404:
                 # Does not exist anymore. Remove and append for report.
                 removed.append(v)
-                del self._appdata['visited'][i]
+                del self._appdata[self.index]['visited'][i]
         print("Removed " + removed.__len__().__str__())
         return removed
     
@@ -55,7 +55,7 @@ class Scraper:
         Checks if offer id exists in
         :return: True if found false otherwise
         """
-        visited = self._appdata["visited"]
+        visited = self._appdata[self.index]["visited"]
         for v in visited:
             if v["id"] == offer_id:
                 return True
@@ -91,7 +91,7 @@ class Scraper:
                     continue
                 
                 title = offer.xpath("div/h2/a/span/text()")[0]
-                link = f'{self._appdata["baseUrl"]}{offer.xpath("div/h2/a/attribute::href")[0]}'
+                link = f'{self._appdata[self.index]["baseUrl"]}{offer.xpath("div/h2/a/attribute::href")[0]}'
                 offer_type = offer.xpath('div/div/span/span[@class="tipi"]/text()')[0]
                 desc = offer.xpath('div/div/div[@class="kratek_container"]/div/text()')[0]
                 size = offer.xpath('div/div/div[@class="main-data"]/span[@class="velikost"]/text()')[0]
@@ -110,7 +110,7 @@ class Scraper:
                     "agency": agency,
                 }
                 new_offers.append(o)
-                self._appdata["visited"].append(o)
+                self._appdata[self.index]["visited"].append(o)
             # End of for
             
             # na koncu se "gremo na naslednjo stran"
@@ -146,7 +146,7 @@ class Scraper:
         message = MIMEMultipart("alternative")
         message["Subject"] = "Spremembe na nepremicnine.net"
         message["From"] = user
-        message["To"] = ', '.join(self._appdata["mailRecipients"])
+        message["To"] = ', '.join(self._appdata[self.index]["mailRecipients"])
         
         message_text = "Pozdravljen/a,\n\nPrinasam novice iz nepremicnine.net.\n\n\n"
         if len(new) > 0:
@@ -169,27 +169,34 @@ class Scraper:
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(smtp_server, port, context=context) as server:
             server.login(user, password)
-            server.sendmail(user, self._appdata["mailRecipients"], message.as_string())
+            server.sendmail(user, self._appdata[self.index]["mailRecipients"], message.as_string())
         return True
     
     def run(self, nomail):
-        removed = self._check_for_removed()
-        new = []
-        for url in self._appdata["urls"]:
-            print("Checking URL: " + url)
-            found = self._check_for_new(url)
-            print("New found: " + found.__len__().__str__())
-            new.extend(found)
+        overall_succes = False
+        for i in range(len(self._appdata)):
+            self.index = i
+            removed = self._check_for_removed()
+            new = []
+            for url in self._appdata[i]["urls"]:
+                print("Checking URL: " + url)
+                found = self._check_for_new(url)
+                print("New found: " + found.__len__().__str__())
+                new.extend(found)
 
-        print("New combined: " + new.__len__().__str__())
+            print("New combined: " + new.__len__().__str__())
 
-        success = True
-        if not nomail:
-            # poslji mail
-            success = self.send_mail(new, removed)
-        
-        # Prejsni funkciji niso cisti, spreminjajo appdata, ki ga bomo sedaj zapisali nazaj za prihodnja izvajanja
-        if success:
+            success = True
+            if not nomail:
+                # poslji mail
+                success = self.send_mail(new, removed)
+                if success:
+                    overall_succes = True
+            else:
+                overall_succes = True
+
+
+        if overall_succes:
             print("Writing appdata file")
             # Spreminjaj samo ce je bilo uspesno posiljanje
             with open(self._appdata_file, 'w') as f:
@@ -197,7 +204,8 @@ class Scraper:
 
     def purge(self):
 
-        self._appdata["visited"].clear()
+        for i in range(self._appdata):
+            self._appdata[i]["visited"].clear()
 
         with open(self._appdata_file, 'w') as f:
             json.dump(self._appdata, f, indent=2)
